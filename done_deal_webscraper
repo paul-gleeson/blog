@@ -1,0 +1,132 @@
+# first we need to import all the libaraies we will use 
+
+import requests # this library allows us to read from the website we're interested in  
+from urllib.request import urlopen # this library is used for connecting to the websites
+import time # we use the time library to get the current date
+from bs4 import BeautifulSoup # this is the magical library - this makes it easy to access the data on websites
+import pandas as pd # pandas is the building blocks of Python
+
+
+# before kicking into this, we need to set some parameters
+# parameters are like reference points that we can access at any point in the script
+
+# assigning the website url - I've gone for the page with the Toyota GT
+url = 'https://www.donedeal.ie/cars/Toyota/GT86'
+# this is the parameter we use to open the website
+page = urlopen(url)
+# this is how we read from the website
+html = page.read().decode("utf-8")
+# this is how we make sense of the data we access from the website
+soup = BeautifulSoup(html, 'html.parser')
+
+# making sure we have access to the webpage in question 
+print(soup.title.string)
+
+# here, we're using the find_all function to access the data on the webpage
+# the class ('div') and the attributes are found on the webpage itself - there are no quick wins here when you're doing this yourself for the first time
+# ...its all about trial and error here
+card_body = soup.find_all('div', attrs = {'class': 'Card__Body-sc-1v41pi0-8 cAPCyy'})
+
+
+# to access the data correctly, we need to iterate over the response and create a dataframe from it
+# there are many adds on the webpage, each has the same format that we can access
+# so, we need to build a function that allows us to do this in a simple way - we use for loops!
+# here is an example of how we can do this
+basic_info = []
+for item in card_body:
+    basic_info.append(item.find_all('p', attrs={'class': 'Card__InfoText-sc-1v41pi0-13 jDzR'}))
+print(basic_info)
+
+
+# we need to access each element of the ad, so we need a function for each eg add title, car year etc
+# below is the function we can use to to get the title of the add
+
+def car_names(card_body):
+    names = []
+    for item in card_body:
+        for i in item:
+            names.append(i.find_all("p", attrs = {"class" : "Card__Title-sc-1v41pi0-4 duHUaw"}))
+    return names
+    
+# the next 3 functions are self explanatory - car year, car location and car price
+
+def car_year(card_body):
+    years = []
+    for item in card_body:
+        for i in item:
+            years.append(i.find_all("li", attrs = {"class" : "Card__KeyInfoItem-sc-1v41pi0-5 hGnmwg ki-1"}))
+    return years
+
+def car_location(card_body):
+    locations = []
+    for item in card_body:
+        for i in item:
+            locations.append(i.find_all("li", attrs = {"class" : "Card__KeyInfoItem-sc-1v41pi0-5 hGnmwg ki-5"}))
+    return locations
+
+def car_price(card_body):
+    prices = []
+    for item in card_body:
+        for i in item:
+            prices.append(i.find_all("p", attrs = {"class" : "Card__InfoText-sc-1v41pi0-13 jDzR"}))
+    return prices
+    
+# now we can use the functions we created to extract the information we're interested in and create a dataframe
+# a dataframe is like a table in an Excel file - it allows us to 'play' with the data
+car_listings = pd.DataFrame({"Name" : car_names(card_body), "Year": car_year(card_body), "Price": car_price(card_body), "Location": car_location(card_body)})
+
+
+# the rest of this script carries our data wrangling to get the data in a format we can work with
+# the best thing if you're following along is to run each step once at a time & review the changes made to the dataframe
+
+# shifting the position of the price column to be in line with the advertised car (verified on website)
+car_listings['Price'] = car_listings['Price'].shift(-2)
+
+
+# the prices are in nested lists (so a list within a list) and we need to extract them from that
+price_df = car_listings['Price'].explode()
+
+# we need to drop duplicate lines from the output of the above explode command
+price_df = price_df[~price_df.index.duplicated(keep='first')]
+
+# we need to explode it again 
+price_df_2 = price_df.explode()
+
+# bit of a messy dataframe, so lets select all rows that don't have € and ' ' 
+price_df_3 = price_df_2[(price_df_2 != '€') & (price_df_2 != ' ')]
+
+# creating a new column in the original dataframe with the new price column
+car_listings['Price'] = price_df_3
+
+
+
+# some more dataframe tidying up - using explode again to remove the lists (we do this 3 times!!!)
+car_listings = car_listings.apply(pd.Series.explode)
+car_listings = car_listings.apply(pd.Series.explode)
+
+# droping duplicates and any rows with that contain all null values - we also reset the index here 
+final_df = car_listings.apply(pd.Series.explode).drop_duplicates().dropna().reset_index(drop=True)
+
+
+# adding in a new column to record the date the script was run
+final_df['run_date'] = pd.to_datetime('today').strftime("%Y_%m_%d")
+
+# you now have a dataframe of used car prices - lets export the results to an excel file - this will save to your directory unless otherwise stated
+#final_df.to_excel('ford_gt86_prices.xlsx', sheet_name='car_prices',  index=0)
+
+
+# bonus step, to make this script repeatable, use the below bit of code to open the newly created excel file 
+# and simply append results to it, allowing you to monitor over time
+
+import openpyxl
+
+wb = openpyxl.load_workbook("ford_gt86_prices.xlsx") 
+  
+sheet = wb.active 
+
+for index, row in final_df.iterrows():
+
+    sheet.append(row.values.tolist())
+
+wb.save('ford_gt86_prices.xlsx')
+wb.close()
